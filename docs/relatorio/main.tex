@@ -1,0 +1,315 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[brazil]{babel}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{geometry}
+\usepackage{hyperref}
+\geometry{margin=2.0cm}
+
+\title{Trabalho P1 -- Biblioteca de Grafos em C++ \\ \small Teoria dos Grafos -- COS 242}
+\author{Dupla: Carlos Bruno -- Arthur Cury}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\noindent C\'odigo-fonte: \url{https://github.com/Ludwigo0/TrabalhoGrafos}
+
+\section{Projeto e implementa\c c\~ao: o que fizemos e por qu\^e}
+
+Neste trabalho, buscamos desenvolver uma biblioteca de grafos que pudesse ser utilizada
+em outros programas, e n\~ao apenas um execut\'avel feito para resolver um caso
+espec\'ifico. Por esse motivo, dividimos o projeto em duas partes: a biblioteca
+(\texttt{libgrafo}), que concentra as representa\c c\~oes e os algoritmos, e um
+programa-cliente (\texttt{grafo}), respons\'avel por ler os argumentos, chamar as
+fun\c c\~oes da biblioteca, medir os tempos e gravar os resultados.
+
+Essa separa\c c\~ao facilita a reutiliza\c c\~ao do c\'odigo. Um novo programa pode
+incluir os cabe\c calhos da biblioteca e utiliz\'a-la sem precisar copiar a implementa\c c\~ao
+dos algoritmos. Assim, a estrutura do projeto atende melhor ao conceito de biblioteca
+reutiliz\'avel apresentado no enunciado.
+
+\subsection{Guardar o grafo: lista CSR e matriz de bits}
+
+Existem duas formas cl\'assicas de armazenar um grafo. Na \textbf{lista de adjac\^encia},
+cada v\'ertice guarda apenas os seus vizinhos, fazendo com que o espa\c co utilizado
+dependa principalmente do n\'umero de arestas. J\'a na \textbf{matriz de adjac\^encia},
+\'e mantida uma tabela com uma posi\c c\~ao para cada par de v\'ertices. Nesse caso, o
+consumo de mem\'oria depende de $n^2$, mesmo quando o grafo possui poucas arestas.
+Essa diferen\c ca fica evidente nos grafos utilizados. Para o grafo 1, com $10$ mil
+v\'ertices, uma matriz ainda pode ser considerada. Para o grafo 6, com aproximadamente
+$4,8$ milh\~oes de v\'ertices, a quantidade de posi\c c\~oes seria impratic\'avel. Por
+isso, um dos objetivos dos experimentos foi observar na pr\'atica como a escolha da
+representa\c c\~ao influencia o consumo de mem\'oria e o tempo de execu\c c\~ao.
+
+Para a lista de adjac\^encia, evitamos utilizar diretamente um
+\texttt{vector<vector<int>>}. Embora essa estrutura seja simples, cada vetor possui um
+custo de administra\c c\~ao e tamb\'em pode causar fragmenta\c c\~ao de mem\'oria. Em
+grafos muito grandes, esse custo adicional se torna relevante.
+
+Em seu lugar, utilizamos o formato \textbf{CSR} (\textit{Compressed Sparse Row}). Ele
+usa dois vetores cont\'iguos: \texttt{offsets[n+1]}, que indica onde come\c ca e termina
+a lista de cada v\'ertice, e \texttt{edges[2m]}, que armazena os vizinhos. No grafo n\~ao
+direcionado, cada aresta aparece nas listas dos dois extremos. Essa organiza\c c\~ao
+reduz o desperd\'icio de mem\'oria e permite percorrer os vizinhos de forma sequencial,
+aproveitando melhor a localidade de cache.
+
+Como o grafo \'e carregado uma vez e depois apenas consultado, o CSR se mostrou uma
+escolha adequada para este trabalho, mesmo n\~ao sendo a melhor op\c c\~ao para grafos
+que precisam sofrer muitas inser\c c\~oes ou remo\c c\~oes.
+
+Na matriz, cada posi\c c\~ao poderia ser armazenada em um byte, mas optamos por guardar
+\textbf{um bit por posi\c c\~ao}, agrupando os bits em palavras de 64 bits. Com isso, o
+consumo cai para aproximadamente $n^2/8$ bytes. No grafo 2, essa escolha reduz a
+mem\'oria estimada de cerca de 2,3\,GB para aproximadamente 297\,MB. O custo
+adicional aparece no tempo de processamento: para acessar uma posi\c c\~ao,
+precisamos calcular a palavra e a m\'ascara correspondentes. Durante a BFS, as linhas
+da matriz precisam ser percorridas palavra por palavra. Tamb\'em foi necess\'ario utilizar
+tipos de 64 bits no c\'alculo das posi\c c\~oes, pois $n^2$ ultrapassa o limite de um
+inteiro de 32 bits j\'a no grafo 2. Para evitar uma tentativa de aloca\c c\~ao muito
+grande, a matriz possui uma trava de seguran\c ca para $n>60000$ (aproximadamente
+450\,MB): acima disso o construtor recusa a opera\c c\~ao e informa a mem\'oria que seria
+necess\'aria. O resultado \'e registrado como \textit{OOM te\'orico}, e n\~ao como um
+crash inesperado.
+
+As duas representa\c c\~oes implementam a mesma interface abstrata, chamada
+\texttt{Graph}. Assim, os algoritmos recebem uma refer\^encia para essa interface e n\~ao
+precisam conhecer os detalhes internos da estrutura utilizada. Para trocar de CSR para
+matriz, basta alterar a op\c c\~ao \texttt{--rep lista|matriz} na linha de comando.
+Essa decis\~ao simplifica os testes e permite comparar as representa\c c\~oes utilizando
+os mesmos algoritmos.
+
+\subsection{Explorar o grafo: BFS e DFS}
+
+A \textbf{BFS} (busca em largura) explora o grafo por camadas. Primeiro, visita os
+vizinhos da origem; depois, os vizinhos desses v\'ertices, utilizando uma fila. Por
+causa dessa ordem, o n\'ivel atribu\'ido a cada v\'ertice representa a menor dist\^ancia
+at\'e a origem. Por isso, a BFS pode ser usada como base para calcular dist\^ancias,
+componentes e di\^ametros.
+
+A \textbf{DFS} (busca em profundidade) segue uma ideia diferente: avan\c ca por um
+caminho at\'e n\~ao encontrar mais v\'ertices novos e depois retorna para continuar a
+busca. O n\'ivel produzido pela DFS indica a profundidade de descoberta, e n\~ao a
+menor dist\^ancia. Isso fica claro nas tabelas: a DFS alcan\c ca profundidades de
+milh\~oes, enquanto os n\'iveis da BFS permanecem pequenos.
+
+Implementamos as duas buscas de forma \textbf{iterativa}. Essa decis\~ao evita que uma
+DFS recursiva estoure a pilha de chamadas nos grafos maiores. Na representa\c c\~ao por
+matriz, a busca percorre cada linha por palavras de 64 bits, utilizando
+\texttt{forEachNeighbor}. Dessa forma, o custo fica em torno de $O(n^2)$ por busca.
+Uma implementa\c c\~ao que repetisse a varredura da linha para cada vizinho seria muito
+mais lenta; no grafo 2, a varredura otimizada reduziu a penalidade observada para cerca
+de 11 vezes na BFS (cerca de 7 vezes na DFS) em rela\c c\~ao ao CSR.
+
+Os despachantes, como \texttt{bfsAuto}, escolhem automaticamente a implementa\c c\~ao
+mais adequada sem expor os detalhes da representa\c c\~ao ao chamador. Os n\'iveis da
+BFS foram iguais nas duas estruturas, conforme conferido com \texttt{diff}. Os pais,
+por outro lado, podem ser diferentes, pois uma mesma busca pode possuir mais de um
+predecessor v\'alido e a escolha depende da ordem dos vizinhos. A sa\'ida segue o
+formato pedido: para cada v\'ertice, s\~ao registrados o pai e o n\'ivel; a raiz n\~ao
+possui pai e os v\'ertices inalcan\c c\'aveis recebem n\'ivel $-1$.
+
+\subsection{Dist\^ancia e di\^ametro: o exato e o poss\'ivel}
+
+A dist\^ancia entre dois v\'ertices \'e calculada por uma BFS com parada antecipada:
+assim que o destino \'e alcan\c cado, a busca termina. O di\^ametro exato, definido como
+a maior dist\^ancia entre dois v\'ertices, exigiria uma BFS a partir de cada v\'ertice,
+com custo $O(n\cdot(n+m))$. Considerando os tempos medidos, somente no grafo 6 seriam
+necess\'arias aproximadamente 4,8 milh\~oes de BFSs, o que ultrapassaria 30 dias de
+execu\c c\~ao.
+
+Por esse motivo, utilizamos o m\'etodo aproximativo \textit{double-sweep}. Primeiro,
+executamos uma BFS a partir de um v\'ertice qualquer e escolhemos o v\'ertice mais
+distante, chamado $a$. Em seguida, executamos uma nova BFS a partir de $a$ e
+escolhemos o v\'ertice mais distante, chamado $b$. O valor retornado \'e $dist(a,b)$.
+A ideia \'e que a primeira busca tende a encontrar uma regi\~ao pr\'oxima de uma das
+extremidades do di\^ametro.
+
+O m\'etodo utiliza apenas duas BFSs, em vez de $n$, e por isso continua vi\'avel nos
+grafos grandes. Entretanto, ele n\~ao garante o di\^ametro exato: o valor encontrado
+\'e sempre um limite inferior do di\^ametro real. Para grafos desconexos, consideramos
+a maior componente, pois o di\^ametro de um grafo desconexo n\~ao possui um valor finito
+para pares de v\'ertices em componentes diferentes.
+
+\subsection{Componentes, estat\'isticas, entrada e medi\c c\~ao}
+
+Para encontrar as componentes conexas, percorremos os v\'ertices e iniciamos uma BFS
+sempre que encontramos um v\'ertice ainda n\~ao rotulado. Cada busca marca exatamente
+uma componente, e as componentes s\~ao apresentadas em ordem decrescente de tamanho.
+Nas estat\'isticas de grau, utilizamos \texttt{nth\_element} para encontrar a mediana
+sem precisar ordenar os aproximadamente 4,8 milh\~oes de valores do maior grafo.
+
+A leitura tamb\'em exigiu uma decis\~ao de implementa\c c\~ao. O grafo 6 possui cerca de
+722\,MB e 93 milh\~oes de inteiros; por isso, uma leitura ing\^enua com \texttt{cin>>}
+seria muito demorada. Implementamos um scanner que l\^e blocos de 1\,MB com
+\texttt{fread} e converte os n\'umeros manualmente.
+
+O CSR \'e constru\'ido em \textbf{duas passadas} pelo arquivo: primeiro contamos os graus,
+depois calculamos os offsets acumulados e, por fim, preenchemos o vetor de arestas.
+Essa abordagem evita manter uma lista tempor\'aria de aproximadamente 370\,MB no grafo
+6. Os tempos dos algoritmos s\~ao medidos com \texttt{chrono}, sem incluir a leitura e
+a escrita dos arquivos, conforme solicitado no enunciado. A mem\'oria de pico \'e obtida
+por meio do campo VmHWM de \texttt{/proc/self/status}, o que torna a medi\c c\~ao mais
+reprodut\'ivel do que uma observa\c c\~ao manual do monitor do sistema.
+
+\textbf{Como reproduzir.} A compila\c c\~ao pode ser feita com
+\texttt{cmake -S . -B build \&\& cmake --build build -j}, utilizando C++17. Um exemplo
+de execu\c c\~ao \'e:
+{\small\begin{verbatim}
+./build/grafo grafo_1.txt --rep lista --stats --components \
+  --bfs 1 --diameter-approx 1
+\end{verbatim}} O script \path{./scripts/run_estudos.sh} executa todos os
+experimentos e gera o arquivo CSV utilizado nas tabelas. O programa
+\path{./build/test_grafo} verifica o exemplo da Fig.\,1 nas duas representa\c c\~oes,
+a equival\^encia das vias r\'apidas, a leitura de um grafo desconexo e a trava da matriz.
+Na compila\c c\~ao em modo Debug, os \texttt{asserts} tamb\'em s\~ao ativados. Os
+v\'ertices informados pela linha de comando seguem a numera\c c\~ao do arquivo, de 1 a
+$n$.
+
+\section{Estudos de caso -- tabelas}
+
+\begin{table}[h]
+\centering\small
+\caption{Caracter\'isticas (lista CSR) e di\^ametro aproximado.}
+\begin{tabular}{lrrrrrrrr}
+\toprule
+Grafo & $n$ & $m$ & gmin & gmax & gm\'ed & gmed & Comp. (maior/menor) & Di\^am. \\
+\midrule
+1 & 10\,000 & 109\,977 & 8 & 43 & 21,99 & 22 & 1 (10\,000/10\,000) & 4 \\
+2 & 49\,948 & 1\,299\,794 & 1 & 112 & 52,04 & 55 & 10 (25\,000/48) & 5 \\
+3 & 375\,000 & 765\,618 & 1 & 15 & 4,08 & 4 & 2 (250\,000/125\,000) & 22 \\
+4 & 375\,000 & 8\,187\,427 & 9 & 89 & 43,67 & 47 & 2 (250\,000/125\,000) & 4 \\
+5 & 4\,843\,750 & 13\,168\,928 & 1 & 22 & 5,44 & 5 & 5 (2\,500\,000/156\,250) & 12 \\
+6 & 4\,843\,750 & 46\,469\,670 & 2 & 56 & 19,19 & 20 & 5 (2\,500\,000/156\,250) & 7 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Q1 -- mem\'oria (MB de pico).} A lista CSR utilizou 6, 15, 15, 72, 161 e
+415\,MB nos grafos 1 a 6, respectivamente. A matriz de bits utilizou 16,8\,MB no
+grafo 1 e 302\,MB no grafo 2. Para os demais grafos, a matriz n\~ao \'e vi\'avel:
+seriam necess\'arios aproximadamente 17,6\,GB nos grafos 3 e 4, e 2,93\,TB nos
+grafos 5 e 6. Esses valores ultrapassam a mem\'oria de 15\,GiB dispon\'ivel na
+m\'aquina utilizada.
+
+\textbf{Q2/Q3 -- tempo m\'edio de 100 buscas (ms).}
+\begin{center}\small
+\begin{tabular}{lrrrr}
+\toprule
+Grafo & BFS lista & BFS matriz & DFS lista & DFS matriz \\
+\midrule
+1 & 0,8 & 4,9 ($\sim$6$\times$) & 1,0 & 6,3 \\
+2 & 2,6 & 28,5 ($\sim$11$\times$) & 4,4 & 32,1 \\
+3 & 10,5 & -- (OOM) & 18,5 & -- \\
+4 & 106 & -- & 80 & -- \\
+5 & 863 & -- & 1366 & -- \\
+6 & 606 & -- & 905 & -- \\
+\bottomrule
+\end{tabular}
+\end{center}
+\textbf{Unidade:} todos os valores est\~ao em milissegundos por busca. No grafo 3, os
+valores de 10,5\,ms para BFS e 18,5\,ms para DFS correspondem \`a m\'edia de tr\^es
+rodadas, cada uma com 100 origens. Fizemos isso porque a carga da m\'aquina produziu
+varia\c c\~oes consider\'aveis entre as rodadas; a varia\c c\~ao observada nesse grafo
+foi de 9 a 37\,ms, com valor t\'ipico pr\'oximo de 15\,ms.
+
+Na lista CSR, uma busca custa $O(n+m)$. Na matriz, a implementa\c c\~ao precisa
+percorrer as palavras da matriz e pode chegar a $O(n^2)$ por busca. No grafo 2,
+isso significa examinar uma quantidade muito maior de posi\c c\~oes do que na lista.
+Para reduzir esse custo, utilizamos uma varredura por linha com opera\c c\~oes de
+\textit{popcount}. Sem essa otimiza\c c\~ao, a mesma linha seria percorrida repetidas
+vezes e a penalidade ultrapassaria 400$\times$.
+
+\textbf{Q4 -- pai (n\'ivel) dos v\'ertices 10, 20, 30; ``--'' $=$ inalcan\c c\'avel.}
+\begin{center}\scriptsize\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lccccccccc}
+\toprule
+ & \multicolumn{3}{c}{BFS origem 1} & \multicolumn{3}{c}{BFS origem 2} & \multicolumn{3}{c}{BFS origem 3} \\
+Grafo & 10 & 20 & 30 & 10 & 20 & 30 & 10 & 20 & 30 \\
+\midrule
+1 & 2042(3) & 8382(3) & 8979(4) & 8935(2) & 7541(4) & 8660(4) & 7685(3) & 9429(4) & 5783(3) \\
+2 & -- & -- & -- & 31751(3) & -- & -- & -- & 46738(3) & 18855(3) \\
+3 & -- & -- & 141597(14) & 158403(8) & 75471(9) & -- & 158403(10) & 319691(7) & -- \\
+4 & 194465(4) & 274921(4) & 136244(3) & -- & -- & -- & -- & -- & -- \\
+5 & 1888350(8) & -- & 2502539(9) & -- & -- & -- & 3696745(9) & -- & 191713(9) \\
+6 & -- & -- & -- & 1677854(4) & 4095628(5) & 4231681(5) & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{center}
+\begin{center}\scriptsize\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lccccccccc}
+\toprule
+ & \multicolumn{3}{c}{DFS origem 1} & \multicolumn{3}{c}{DFS origem 2} & \multicolumn{3}{c}{DFS origem 3} \\
+Grafo & 10 & 20 & 30 & 10 & 20 & 30 & 10 & 20 & 30 \\
+\midrule
+1 & 3075(9k) & 3575(9k) & 6071(5k) & 6552(5k) & 9429(7k) & 6071(7k) & 2344(9k) & 8781(9k) & 6071(8k) \\
+2 & -- & -- & -- & 18k(16k) & -- & -- & -- & 887(8k) & 33k(3k) \\
+3 & -- & -- & 142k(69k) & 19k(152k) & 142k(111k) & -- & 107k(67k) & 75k(171k) & -- \\
+4 & 272k(160k) & 371k(223k) & 130k(189k) & -- & -- & -- & -- & -- & -- \\
+5 & 906k(1,1M) & -- & 2,5M(1,8M) & -- & -- & -- & 906k(1,8M) & -- & 2,5M(2,0M) \\
+6 & -- & -- & -- & 4,5M(515k) & 624k(2,1M) & 2,9M(1,8M) & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{center}
+Os resultados deixam clara a diferen\c ca entre as buscas: a DFS pode atingir
+profundidades de milh\~oes, enquanto a BFS registra a menor dist\^ancia em n\'iveis
+pequenos. Nas representa\c c\~oes \texttt{CSRGraph} e \texttt{BitMatrixGraph}, os
+n\'iveis da BFS foram id\^enticos, conforme verificado com \texttt{diff}. Os pais podem
+ser diferentes quando existem v\'arios predecessores poss\'iveis, pois a ordem dos
+vizinhos determina qual deles \'e escolhido.
+
+\textbf{Q5 -- dist\^ancias.} Na ordem dos grafos 1 a 6, as dist\^ancias para os pares
+(10,20), (10,30) e (20,30) foram, respectivamente, $(3,-1,9,4,-1,5)$,
+$(3,-1,-1,3,9,5)$ e $(4,3,-1,4,-1,5)$. O valor $-1$ indica que os v\'ertices
+pertencem a componentes diferentes. No grafo 2, o v\'ertice 10 est\'a na primeira
+componente, enquanto 20 e 30 est\~ao na segunda.
+
+\textbf{Q6 -- componentes.} O grafo 1 \'e conexo. O grafo 2 possui 10 componentes,
+os grafos 3 e 4 possuem 2 componentes, com tamanhos 250 mil e 125 mil, e os grafos
+5 e 6 possuem 5 componentes. Nestes dois \'ultimos, a maior componente tem 2,5
+milh\~oes de v\'ertices e a menor tem 156.250. As listas completas de membros est\~ao
+no arquivo \texttt{components.txt}, em ordem decrescente de tamanho.
+
+\textbf{Q7 -- di\^ametro.} Os valores aproximados obtidos pelo \textit{double-sweep},
+com duas BFSs, foram 4, 5, 22, 4, 12 e 7, respectivamente. O c\'alculo exato \'e
+invi\'avel para os grafos grandes: no grafo 6, seriam necess\'arias 4,8 milh\~oes de
+BFSs, o que levaria mais de 30 dias com os tempos observados.
+
+No grafo 1, foi poss\'ivel calcular o di\^ametro exato, cujo valor foi 5. O processo
+levou cerca de 6\,s com a lista e 44\,s com a matriz. Assim, o resultado aproximado
+4 foi confirmado como um limite inferior do valor real. No exemplo da Fig.\,1, o
+valor exato e o aproximado tamb\'em coincidiram em 2.
+
+\section{An\'alise: o que os n\'umeros nos contaram}
+Os resultados confirmam a expectativa apresentada no in\'icio do relat\'orio. Para os
+grafos testados, a lista CSR foi a alternativa mais adequada, principalmente quando o
+n\'umero de v\'ertices cresceu. A matriz de bits ainda coube no grafo 2, mas apresentou
+tempo aproximadamente 11 vezes maior na BFS (cerca de 7 vezes na DFS). A partir do grafo 3, ela deixou de
+ser uma alternativa pr\'atica tanto pelo consumo de mem\'oria quanto pelo custo
+quadr\'atico das buscas.
+
+Essa conclus\~ao deve ser entendida dentro do contexto dos experimentos realizados:
+os grafos s\~ao esparsos e os algoritmos avaliados s\~ao principalmente BFS e DFS. Em
+grafos densos ou em aplica\c c\~oes que realizem muitas consultas diretas de adjac\^encia,
+a matriz pode ter outras vantagens. Mesmo assim, para o conjunto analisado, o CSR
+apresentou a melhor rela\c c\~ao entre mem\'oria utilizada e tempo de execu\c c\~ao.
+
+Tamb\'em identificamos algumas arestas repetidas nos grafos 1 e 2, com os v\'ertices
+invertidos. A lista CSR mant\'em essas repeti\c c\~oes, enquanto a matriz representa
+apenas a exist\^encia de cada vizinhan\c ca. Isso explica as pequenas diferen\c cas nas
+estat\'isticas de grau m\'edio, de 0,047\% no grafo 1 e 0,078\% no grafo 2. Apesar
+disso, os n\'iveis, as dist\^ancias e as componentes encontradas foram os mesmos.
+
+Por fim, os grafos 3 a 6 possuem componentes desconexas com tamanhos bem definidos.
+Essa caracter\'istica explica as dist\^ancias iguais a $-1$ e tamb\'em ajuda a manter o
+custo do \textit{double-sweep} controlado: cada BFS percorre somente a componente em
+que a busca foi iniciada. No grafo 6, por exemplo, duas BFSs ainda foram executadas
+em aproximadamente 0,5 a 1,5\,s, enquanto o c\'alculo exato exigiria uma quantidade
+de buscas impratic\'avel.
+
+De modo geral, o trabalho mostra que a escolha da estrutura de dados n\~ao \'e apenas
+uma decis\~ao de implementa\c c\~ao. Ela influencia diretamente a escalabilidade do
+programa e determina quais algoritmos podem ser executados em grafos grandes.
+
+\end{document}

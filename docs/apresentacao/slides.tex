@@ -1,0 +1,290 @@
+\documentclass[10pt]{beamer}
+\usepackage[utf8]{inputenc}
+\usepackage[brazil]{babel}
+\usepackage{booktabs}
+\usepackage{listings}
+\usetheme{Madrid}
+\usecolortheme{default}
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{footline}[frame number]
+\lstset{
+  language=C++,
+  basicstyle=\ttfamily\scriptsize,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  frame=single,
+  breaklines=true,
+  aboveskip=2pt,
+  belowskip=2pt
+}
+
+\title{Trabalho P1 -- Biblioteca de Grafos em C++}
+\subtitle{Teoria dos Grafos -- COS 242}
+\author{Carlos Bruno \and Arthur Cury}
+\date{2026}
+\institute{\url{https://github.com/Ludwigo0/TrabalhoGrafos}}
+
+\begin{document}
+
+\begin{frame}
+\titlepage
+\end{frame}
+
+\begin{frame}{A ideia do projeto}
+\begin{itemize}
+\item O objetivo n\~ao era apenas criar um execut\'avel: era construir uma
+\textbf{biblioteca que pudesse ser reutilizada} em outros programas.
+\item \textbf{\texttt{libgrafo}} guarda as representa\c c\~oes e os algoritmos.
+Ela n\~ao conhece a linha de comando nem os arquivos de sa\'ida.
+\item \textbf{\texttt{grafo}} \'e o programa-cliente: recebe as op\c c\~oes,
+chama a biblioteca, mede os tempos e grava os resultados.
+\item Essa separa\c c\~ao facilita tanto a reutiliza\c c\~ao quanto os testes.
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Como as classes se conectam}
+\begin{itemize}
+\item \textbf{\texttt{Graph}} \'e a interface comum: define o que qualquer
+representa\c c\~ao precisa oferecer.
+\item \textbf{\texttt{CSRGraph}} implementa a lista de adjac\^encia.
+\textbf{\texttt{BitMatrixGraph}} implementa a matriz em bits.
+\item BFS, DFS, componentes e dist\^ancias recebem apenas um
+\texttt{const Graph\&}. Eles n\~ao precisam conhecer a estrutura interna.
+\item Para repetir o mesmo experimento, basta trocar \texttt{--rep lista} por
+\texttt{--rep matriz}.
+\item Na chamada, o programa sempre enxerga um \texttt{Graph}. Internamente,
+as fun\c c\~oes \texttt{*Auto} identificam se o objeto \'e um CSR ou uma matriz
+de bits e selecionam o tratamento adequado.
+\item A matriz precisa de uma otimiza\c c\~ao espec\'ifica, porque a interface
+gen\'erica acessa vizinhos individualmente; sem cuidado, a mesma linha poderia
+ser percorrida repetidamente.
+\item A interface e o resultado n\~ao mudam; a especializa\c c\~ao fica escondida
+na biblioteca.
+\end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]{A interface \texttt{Graph} em c\'odigo}
+\begin{lstlisting}
+class Graph {
+public:
+    virtual ~Graph() = default;
+    virtual int numVertices() const = 0;
+    virtual long long numEdges() const = 0;
+    virtual int degree(int v) const = 0;
+    virtual int neighbor(int v, int k) const = 0;
+};
+\end{lstlisting}
+\begin{itemize}
+\item A classe base n\~ao guarda nenhum vetor: ela define apenas o contrato.
+\item O algoritmo pergunta ``qual \'e o grau?'' e ``qual \'e o vizinho $k$?'',
+sem perguntar ``onde isso est\'a armazenado?''.
+\item As duas representa\c c\~oes podem compartilhar o mesmo c\'odigo de alto
+n\'ivel, enquanto a travessia adequada \'e escolhida internamente.
+\item Essa escolha acontece em tempo de execu\c c\~ao, antes da busca come\c car;
+n\~ao precisamos criar um segundo programa ou duplicar o cliente.
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Por que escolhemos CSR?}
+\begin{itemize}
+\item Uma lista de adjac\^encia guarda apenas as arestas que realmente existem.
+\item A alternativa simples, \texttt{vector<vector<int>>}, cria um vetor para
+cada v\'ertice. Cada vetor custa cerca de 24 bytes mesmo quando est\'a vazio.
+\item No maior grafo, isso representa aproximadamente \textbf{115 MB apenas
+para administrar os vetores}, antes das arestas.
+\item CSR usa dois vetores cont\'iguos e chega a aproximadamente
+\textbf{373 MB no grafo 6}, com tamanho exato e boa localidade de cache.
+\item Como o grafo \'e montado uma vez e depois apenas consultado, a estrutura
+est\'atica atende bem ao nosso caso de uso.
+\end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]{CSR: como os dois vetores funcionam}
+\begin{lstlisting}
+class CSRGraph : public Graph {
+    vector<int> offsets_; // tamanho n + 1
+    vector<int> edges_;   // tamanho 2m
+
+    int degree(int v) const override {
+        return offsets_[v + 1] - offsets_[v];
+    }
+
+    int neighbor(int v, int k) const override {
+        return edges_[offsets_[v] + k];
+    }
+};
+\end{lstlisting}
+\begin{itemize}
+\item \texttt{offsets[v]} marca o come\c co da lista de $v$;
+\texttt{offsets[v+1]} marca o fim.
+\end{itemize}
+\begin{block}{Exemplo pequeno}
+\small
+\texttt{offsets = \{0,2,3,5\}} \quad
+\texttt{edges = \{1,2 \;|\; 0 \;|\; 0,1\}}\\
+\texttt{v=0}: \texttt{edges[0..2) = \{1,2\}}\qquad
+\texttt{v=1}: \texttt{edges[2..3) = \{0\}}\\
+\texttt{v=2}: \texttt{edges[3..5) = \{0,1\}}
+\end{block}
+\begin{itemize}
+\item A carga ocorre em duas passadas: conta graus, calcula os offsets e
+depois preenche \texttt{edges}; assim n\~ao mantemos 46 milh\~oes de arestas
+tempor\'arias.
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Matriz em bits: a ideia principal}
+\begin{itemize}
+\item A matriz reserva uma posi\c c\~ao para cada par de v\'ertices, mesmo
+quando n\~ao existe aresta. Por isso seu custo depende de $n^2$.
+\item Em vez de usar um byte por posi\c c\~ao, guardamos apenas um bit:
+\textbf{0 = n\~ao existe aresta; 1 = existe aresta}.
+\item No grafo 2, isso reduz a estimativa de 2,3 GB para \textbf{297 MB}.
+\item O ganho de mem\'oria vem com um acesso um pouco mais elaborado; esse
+detalhe fica encapsulado na biblioteca.
+\item A partir do grafo 3, mesmo essa matriz compacta exigiria mem\'oria demais,
+por isso o programa recusa a aloca\c c\~ao e registra OOM te\'orico.
+\end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]{Matriz em bits: como o acesso muda}
+\begin{columns}[T]
+\begin{column}{0.47\textwidth}
+\textbf{Matriz cl\'assica}\par\smallskip
+Cada posi\c c\~ao usa um byte. Para consultar $(u,v)$, calculamos a posi\c c\~ao
+da c\'elula e lemos diretamente o valor 0 ou 1.
+
+\begin{lstlisting}
+matriz[u * n + v]
+\end{lstlisting}
+\end{column}
+\begin{column}{0.49\textwidth}
+\textbf{Matriz em bits}\par\smallskip
+Cada palavra guarda 64 posi\c c\~oes. Primeiro localizamos o bloco e depois o
+bit dentro dele.
+
+\begin{lstlisting}
+size_t p = (size_t)u * n_ + v;
+bool existe = (data_[p / 64] >> (p % 64)) & 1ULL;
+\end{lstlisting}
+\end{column}
+\end{columns}
+\begin{itemize}
+\item A vers\~ao em bits economiza oito vezes mais mem\'oria, mas precisa de
+divis\~ao, deslocamento e m\'ascara para consultar uma posi\c c\~ao.
+\item Por isso \texttt{BitMatrixGraph} possui um tratamento interno pr\'oprio
+para percorrer linhas; essa complexidade n\~ao aparece para quem usa \texttt{Graph}.
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Quando os dados ficaram grandes}
+\begin{itemize}
+\item O grafo 6 possui aproximadamente 93 milh\~oes de inteiros em 722 MB de
+texto. Usamos um leitor pr\'oprio por blocos com \texttt{fread}.
+\item BFS e DFS s\~ao iterativas: uma DFS recursiva poderia estourar a pilha.
+\item O cron\^ometro envolve apenas o algoritmo, sem leitura ou escrita. A
+mem\'oria de pico \'e registrada pelo pr\'oprio processo.
+\item O di\^ametro exato faria 4,8 milh\~oes de BFSs no grafo 6, mais de 30 dias
+na taxa medida. Por isso tamb\'em implementamos o \textit{double-sweep}, com
+apenas duas BFSs.
+\end{itemize}
+\begin{block}{Double-sweep: estimativa do di\^ametro}
+\begin{center}\small
+\textbf{Primeira BFS:} origem qualquer $s$ $\longrightarrow$
+mais distante $a$\\[2pt]
+\textbf{Segunda BFS:} origem $a$ $\longrightarrow$
+mais distante $b$\\[2pt]
+\textbf{Resultado:}\quad $d(a,b)=\textnormal{nivel de }b$
+\quad\textnormal{na segunda BFS}
+\end{center}
+\end{block}
+\end{frame}
+
+\begin{frame}{Mem\'oria: o que coube na pr\'atica?}
+\begin{center}\small
+\begin{tabular}{lrr}
+\toprule
+Grafo & Lista CSR & Matriz em bits \\
+\midrule
+1 (10 mil v.) & 6 MB & 16,8 MB \\
+2 (50 mil v.) & 15 MB & 302 MB \\
+3--4 (375 mil v.) & 15 / 72 MB & OOM ($\sim$17,6 GB) \\
+5--6 (4,8 milh\~oes v.) & 161 / 415 MB & OOM ($\sim$2,93 TB) \\
+\bottomrule
+\end{tabular}
+\end{center}
+\begin{itemize}
+\item OOM significa que a matriz exigiria mais mem\'oria do que a m\'aquina
+consegue fornecer; n\~ao \'e uma falha silenciosa do programa.
+\item A compara\c c\~ao completa entre representa\c c\~oes \'e fisicamente poss\'ivel
+apenas nos grafos 1 e 2.
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Tempo m\'edio por busca (ms)}
+\begin{center}\small
+\begin{tabular}{lrrrr}
+\toprule
+Grafo & BFS lista & BFS matriz & DFS lista & DFS matriz \\
+\midrule
+1 & 0,8 & 4,9 & 1,0 & 6,3 \\
+2 & 2,6 & 28,5 ($\sim$11$\times$) & 4,4 & 32,1 \\
+3 & 10,5 & -- & 18,5 & -- \\
+4 & 106 & -- & 80 & -- \\
+5 & 863 & -- & 1366 & -- \\
+6 & 606 & -- & 905 & -- \\
+\bottomrule
+\end{tabular}
+\end{center}
+\begin{itemize}
+\item M\'edia de 100 buscas, sem contar I/O.
+\item Lista: $O(n+m)$; matriz em bits: $O(n^2)$ por busca.
+\item No grafo 2, a matriz cabe, mas na BFS j\'a leva aproximadamente 11 vezes
+mais (na DFS, cerca de 7 vezes).
+\end{itemize}
+\end{frame}
+
+\begin{frame}{O que os dados revelaram}
+\begin{itemize}
+\item Os grafos n\~ao s\~ao todos conexos: o grafo 2 tem 10 componentes; os
+grafos 3 e 4 t\^em 2; os grafos 5 e 6 t\^em 5. Por isso algumas dist\^ancias
+retornam $-1$: n\~ao existe caminho entre os v\'ertices.
+\item H\'a arestas repetidas em ordem invertida (52 no grafo 1 e 1019 no grafo 2).
+Isso produz pequenas diferen\c cas no grau m\'edio (0,047\% no grafo 1 e 0,078\%
+no grafo 2), mas n\~ao altera as conclus\~oes dos algoritmos.
+\item Nas representa\c c\~oes \texttt{CSRGraph} e \texttt{BitMatrixGraph}, os
+n\'iveis da BFS coincidem porque representam dist\^ancias m\'inimas. Os pais
+podem mudar quando h\'a mais de um predecessor poss\'ivel; a ordem de visita
+define qual deles \'e escolhido.
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Conclus\~ao}
+\begin{itemize}
+\item A matriz \'e interessante nos dois primeiros grafos, mas deixa de ser
+vi\'avel a partir do terceiro. A CSR \'e a representa\c c\~ao que permite tratar
+todos os dados.
+\item A interface comum permite reutilizar os algoritmos. As ``vias r\'apidas''
+s\~ao implementa\c c\~oes internas espec\'ificas da matriz que percorrem seus
+bits sem repetir a mesma varredura; o programa e os resultados continuam iguais.
+\item Assim, a matriz n\~ao \'e penalizada por uma implementa\c c\~ao ing\^enua
+da interface: a compara\c c\~ao mede as estruturas, n\~ao um desperd\'icio evit\'avel.
+\item O script refaz os experimentos, a suíte verifica exemplos e casos de
+erro, e o c\'odigo completo est\'a no reposit\'orio.
+\end{itemize}
+\begin{center}
+\url{https://github.com/Ludwigo0/TrabalhoGrafos}
+\end{center}
+\end{frame}
+
+\begin{frame}[plain]
+\begin{center}
+\vfill
+{\Huge \textbf{Obrigado!}}\\[12pt]
+Carlos Bruno \quad -- \quad Arthur Cury
+\vfill
+\end{center}
+\end{frame}
+
+\end{document}

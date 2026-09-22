@@ -1,0 +1,31 @@
+# Build e saidas
+build/
+build-debug/
+out/
+out_estudos/
+
+# Grafos grandes (baixar do site da disciplina; nao versionar ~514 MB)
+*.txt
+*.txt.gz
+!data/exemplo_fig1.txt
+!CMakeLists.txt
+
+# LaTeX (ignora auxiliares, mas VERSIONA os PDFs finais)
+docs/relatorio/*.pdf
+!docs/relatorio/main.pdf
+docs/apresentacao/*.aux
+docs/apresentacao/*.log
+docs/apresentacao/*.out
+docs/apresentacao/*.toc
+docs/apresentacao/*.nav
+docs/apresentacao/*.snm
+docs/apresentacao/*.fls
+docs/apresentacao/*.fdb_latexmk
+docs/apresentacao/*.synctex.gz
+docs/relatorio/*.aux
+docs/relatorio/*.log
+docs/relatorio/*.out
+docs/relatorio/*.toc
+docs/relatorio/*.fls
+docs/relatorio/*.fdb_latexmk
+docs/relatorio/*.synctex.gz
